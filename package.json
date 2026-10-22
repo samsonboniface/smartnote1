@@ -1,0 +1,12 @@
+{
+  "name": "smartnote",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Turn confusing lecture notes into a clear study guide.",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
