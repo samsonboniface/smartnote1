@@ -1,65 +1,216 @@
 "use strict";
 
-const fileInput = document.getElementById("file-input");
-const dropZone = document.getElementById("drop-zone");
-const selectedFile = document.getElementById("selected-file");
-const uploadStatus = document.getElementById("upload-status");
-const notesText = document.getElementById("notes-text");
-const questionText = document.getElementById("question-text");
-const languageSelect = document.getElementById("language-select");
-const toast = document.getElementById("toast");
-const resultBadge = document.getElementById("result-badge");
-const sampleCallout = document.getElementById("sample-callout");
-const explanationText = document.getElementById("explanation-text");
-const keyPoints = document.getElementById("key-points");
-const practiceList = document.getElementById("practice-list");
-const languageTag = document.getElementById("language-tag");
-const explainButton = document.getElementById("explain-button");
-const explainButtonLabel = explainButton.querySelector("span");
-const resultsPanel = document.getElementById("results-panel");
-const prototypeNote = document.getElementById("prototype-note");
-const aiStatusLabel = document.getElementById("ai-status-label");
+// ══════════════════════════════════════════════════════════════════════════════
+// AUTH — simple localStorage-based user store
+// Users are stored as: { name, email, passwordHash } in localStorage key
+// "sn_users". Active session stored under "sn_session" as { email, name }.
+// ══════════════════════════════════════════════════════════════════════════════
+
+const authOverlay  = document.getElementById("auth-overlay");
+const appShell     = document.getElementById("app-shell");
+const signinForm   = document.getElementById("signin-form");
+const signupForm   = document.getElementById("signup-form");
+const signinError  = document.getElementById("signin-error");
+const signupError  = document.getElementById("signup-error");
+const authTitle    = document.getElementById("auth-title");
+const authSub      = document.getElementById("auth-sub");
+const authToggleBtn = document.getElementById("auth-toggle-btn");
+const authToggleText = document.getElementById("auth-toggle-text");
+const signoutBtn   = document.getElementById("signout-btn");
+const avatarBtn    = document.getElementById("avatar-btn");
+
+let authMode = "signin"; // "signin" | "signup"
+
+// ── Simple hash (not cryptographic — fine for a local study tool) ──────────
+async function hashPassword(password) {
+  const enc = new TextEncoder().encode(password);
+  const buf = await crypto.subtle.digest("SHA-256", enc);
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+function getUsers() {
+  try { return JSON.parse(localStorage.getItem("sn_users") || "[]"); } catch { return []; }
+}
+function saveUsers(users) {
+  localStorage.setItem("sn_users", JSON.stringify(users));
+}
+function getSession() {
+  try { return JSON.parse(localStorage.getItem("sn_session") || "null"); } catch { return null; }
+}
+function saveSession(session) {
+  localStorage.setItem("sn_session", JSON.stringify(session));
+}
+function clearSession() {
+  localStorage.removeItem("sn_session");
+}
+
+function showApp(session) {
+  authOverlay.hidden = true;
+  appShell.hidden = false;
+  // Update avatar with user initial
+  avatarBtn.textContent = (session.name || session.email).charAt(0).toUpperCase();
+  avatarBtn.setAttribute("aria-label", session.name || session.email);
+}
+
+function showAuth() {
+  authOverlay.hidden = false;
+  appShell.hidden = true;
+}
+
+function setAuthMode(mode) {
+  authMode = mode;
+  signinForm.hidden = mode !== "signin";
+  signupForm.hidden = mode !== "signup";
+  signinError.textContent = "";
+  signupError.textContent = "";
+  if (mode === "signin") {
+    authTitle.textContent = "Welcome back";
+    authSub.textContent = "Sign in to continue studying";
+    authToggleText.textContent = "Don't have an account?";
+    authToggleBtn.textContent = "Sign up";
+  } else {
+    authTitle.textContent = "Create your account";
+    authSub.textContent = "Free to use — just need your email";
+    authToggleText.textContent = "Already have an account?";
+    authToggleBtn.textContent = "Sign in";
+  }
+}
+
+authToggleBtn.addEventListener("click", function () {
+  setAuthMode(authMode === "signin" ? "signup" : "signin");
+});
+
+// ── Sign Up ────────────────────────────────────────────────────────────────
+signupForm.addEventListener("submit", async function (e) {
+  e.preventDefault();
+  signupError.textContent = "";
+  const name     = document.getElementById("signup-name").value.trim();
+  const email    = document.getElementById("signup-email").value.trim().toLowerCase();
+  const password = document.getElementById("signup-password").value;
+
+  if (!name)  { signupError.textContent = "Please enter your name."; return; }
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    signupError.textContent = "Please enter a valid email address."; return;
+  }
+  if (password.length < 6) {
+    signupError.textContent = "Password must be at least 6 characters."; return;
+  }
+
+  const users = getUsers();
+  if (users.find(u => u.email === email)) {
+    signupError.textContent = "An account with this email already exists. Sign in instead."; return;
+  }
+
+  const submitBtn = signupForm.querySelector(".auth-btn");
+  submitBtn.disabled = true;
+  submitBtn.textContent = "Creating account…";
+
+  const hash = await hashPassword(password);
+  users.push({ name, email, passwordHash: hash });
+  saveUsers(users);
+
+  const session = { email, name };
+  saveSession(session);
+  showApp(session);
+
+  submitBtn.disabled = false;
+  submitBtn.textContent = "Create account";
+});
+
+// ── Sign In ────────────────────────────────────────────────────────────────
+signinForm.addEventListener("submit", async function (e) {
+  e.preventDefault();
+  signinError.textContent = "";
+  const email    = document.getElementById("signin-email").value.trim().toLowerCase();
+  const password = document.getElementById("signin-password").value;
+
+  if (!email) { signinError.textContent = "Please enter your email."; return; }
+  if (!password) { signinError.textContent = "Please enter your password."; return; }
+
+  const submitBtn = signinForm.querySelector(".auth-btn");
+  submitBtn.disabled = true;
+  submitBtn.textContent = "Signing in…";
+
+  const hash  = await hashPassword(password);
+  const users = getUsers();
+  const user  = users.find(u => u.email === email && u.passwordHash === hash);
+
+  submitBtn.disabled = false;
+  submitBtn.textContent = "Sign in";
+
+  if (!user) {
+    signinError.textContent = "Incorrect email or password. Try again."; return;
+  }
+
+  const session = { email: user.email, name: user.name };
+  saveSession(session);
+  showApp(session);
+});
+
+// ── Password show/hide toggles ─────────────────────────────────────────────
+document.querySelectorAll(".eye-btn").forEach(function (btn) {
+  btn.addEventListener("click", function () {
+    const input = document.getElementById(btn.dataset.target);
+    const isHidden = input.type === "password";
+    input.type = isHidden ? "text" : "password";
+    btn.querySelector(".eye-icon").hidden = isHidden;
+    btn.querySelector(".eye-off-icon").hidden = !isHidden;
+    btn.setAttribute("aria-label", isHidden ? "Hide password" : "Show password");
+  });
+});
+
+// ── Sign Out ───────────────────────────────────────────────────────────────
+signoutBtn.addEventListener("click", function () {
+  clearSession();
+
+  // Clear the current study workspace so the next user starts fresh.
+  if (typeof clearFile === "function") clearFile();
+  if (typeof historyList !== "undefined") historyList.replaceChildren();
+  if (typeof notesText !== "undefined") notesText.value = "";
+  if (typeof questionText !== "undefined") questionText.value = "";
+  if (typeof languageSelect !== "undefined") languageSelect.value = "Simple English";
+  if (typeof updateEmptyState === "function") updateEmptyState();
+
+  setAuthMode("signin");
+  showAuth();
+});
+
+// ── Boot: check for existing session ──────────────────────────────────────
+(function boot() {
+  const session = getSession();
+  if (session && session.email) {
+    showApp(session);
+  } else {
+    setAuthMode("signin");
+    showAuth();
+  }
+})();
+
+// ══════════════════════════════════════════════════════════════════════════════
+// MAIN APP
+// ══════════════════════════════════════════════════════════════════════════════
+
+const fileInput       = document.getElementById("file-input");
+const dropZone        = document.getElementById("drop-zone");
+const selectedFile    = document.getElementById("selected-file");
+const uploadStatus    = document.getElementById("upload-status");
+const notesText       = document.getElementById("notes-text");
+const questionText    = document.getElementById("question-text");
+const languageSelect  = document.getElementById("language-select");
+const toast           = document.getElementById("toast");
+const explainButton   = document.getElementById("explain-button");
+const sendLabel       = document.getElementById("send-label");
+const historyList     = document.getElementById("history-list");
+const emptyState      = document.getElementById("empty-state");
+const prototypeNote   = document.getElementById("prototype-note");
+const aiStatusLabel   = document.getElementById("ai-status-label");
+
 const MAX_FILE_SIZE = 15 * 1024 * 1024;
 let activeFile = null;
 let toastTimeout;
-let currentGuide;
-let currentGuideIsSample = true;
+let pendingCount = 0; // how many requests are in-flight
 
-const sampleStudyGuide = {
-  "Simple English": {
-    explanation: "Plants make their own food using sunlight. They take in water from the soil and a gas called carbon dioxide from the air. Their leaves turn these ingredients into sugar, which gives the plant energy.",
-    keyPoints: [
-      "Plants use sunlight to make food.",
-      "Leaves take in carbon dioxide from the air.",
-      "Water comes up from the roots."
-    ],
-    questions: [
-      "What do plants use sunlight for?",
-      "Where does a plant get its water?"
-    ],
-    answers: [
-      "Plants use sunlight to make their own food.",
-      "A plant absorbs water from the soil through its roots."
-    ]
-  },
-  Pidgin: {
-    explanation: "Plant dey make their own food with sunlight. Dem collect water from soil and carbon dioxide gas from air. The leaves mix everything together to make sugar, wey give the plant energy.",
-    keyPoints: [
-      "Plant dey use sunlight make food.",
-      "Leaves collect carbon dioxide from the air.",
-      "Roots dey carry water from the soil."
-    ],
-    questions: [
-      "Wetin plant dey use sunlight do?",
-      "Where plant dey get water from?"
-    ],
-    answers: [
-      "Plant dey use sunlight make their own food.",
-      "Plant roots dey collect water from the soil."
-    ]
-  }
-};
-
+// ── Toast ──────────────────────────────────────────────────────────────────
 function showToast(message) {
   window.clearTimeout(toastTimeout);
   toast.textContent = message;
@@ -69,40 +220,67 @@ function showToast(message) {
   }, 4300);
 }
 
-function renderGuide(guide, language, isSample) {
-  currentGuide = guide;
-  currentGuideIsSample = isSample;
-  explanationText.textContent = guide.explanation;
-  languageTag.textContent = language;
-  resultBadge.textContent = isSample ? "SAMPLE" : "AI STUDY GUIDE";
-  sampleCallout.hidden = !isSample;
-
-  keyPoints.replaceChildren();
-  guide.keyPoints.forEach(function (point, index) {
-    const item = document.createElement("li");
-    const number = document.createElement("span");
-    number.textContent = String(index + 1).padStart(2, "0");
-    item.append(number, document.createTextNode(point));
-    keyPoints.append(item);
-  });
-
-  practiceList.replaceChildren();
-  guide.questions.forEach(function (question) {
-    const item = document.createElement("li");
-    item.textContent = question;
-    practiceList.append(item);
-  });
-  const answer = document.querySelector(".quiz-answer");
-  if (answer) answer.remove();
-  const quizButton = document.getElementById("quiz-button");
-  quizButton.textContent = "Test yourself →";
-  quizButton.setAttribute("aria-expanded", "false");
+// ── Empty state visibility ─────────────────────────────────────────────────
+function updateEmptyState() {
+  emptyState.hidden = historyList.children.length > 0;
 }
 
-function renderSampleGuide() {
-  renderGuide(sampleStudyGuide[languageSelect.value], languageSelect.value, true);
+// ── Build a history entry card ─────────────────────────────────────────────
+function createHistoryCard(label, guide, language) {
+  const entry = document.createElement("details");
+  entry.className = "history-entry";
+  entry.open = true;
+
+  // Summary row
+  const summary = document.createElement("summary");
+  summary.className = "history-summary";
+
+  const qSpan = document.createElement("span");
+  qSpan.className = "history-q";
+  qSpan.textContent = label;
+
+  const meta = document.createElement("span");
+  meta.className = "history-meta";
+
+  const badge = document.createElement("span");
+  badge.className = "lang-badge";
+  badge.textContent = language;
+
+  const chev = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  chev.setAttribute("viewBox", "0 0 16 16");
+  chev.setAttribute("fill", "none");
+  chev.setAttribute("aria-hidden", "true");
+  chev.classList.add("entry-chevron");
+  chev.innerHTML = '<path d="m4 6 4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>';
+
+  meta.append(badge, chev);
+  summary.append(qSpan, meta);
+  entry.append(summary);
+
+  // Body
+  const body = document.createElement("div");
+  body.className = "history-body";
+
+  const answerEl = document.createElement("p");
+  answerEl.className = "history-answer";
+  answerEl.textContent = guide.explanation;
+  body.append(answerEl);
+
+  entry.append(body);
+  return entry;
 }
 
+// ── Create a loading placeholder card ─────────────────────────────────────
+function createLoadingCard(label) {
+  const card = document.createElement("div");
+  card.className = "loading-card";
+  card.innerHTML =
+    '<span class="loading-q">' + label + '</span>' +
+    '<span class="loading-spinner" aria-label="Generating…"></span>';
+  return card;
+}
+
+// ── File handling ──────────────────────────────────────────────────────────
 function setUploadError(message) {
   uploadStatus.textContent = message;
 }
@@ -115,7 +293,6 @@ function readableFileSize(bytes) {
 function acceptFile(file) {
   uploadStatus.textContent = "";
   if (!file) return;
-
   const extension = file.name.split(".").pop().toLowerCase();
   const supportedExtensions = ["pdf", "jpg", "jpeg", "png", "webp"];
   if (!supportedExtensions.includes(extension)) {
@@ -126,7 +303,6 @@ function acceptFile(file) {
     setUploadError("That file is over 15 MB. Choose a smaller file to continue.");
     return;
   }
-
   activeFile = file;
   document.getElementById("file-name").textContent = file.name;
   document.getElementById("file-size").textContent = readableFileSize(file.size);
@@ -160,36 +336,52 @@ function readFileData(file) {
   });
 }
 
-function setProcessing(isProcessing) {
-  explainButton.disabled = isProcessing;
-  fileInput.disabled = isProcessing;
-  notesText.disabled = isProcessing;
-  questionText.disabled = isProcessing;
-  languageSelect.disabled = isProcessing;
-  resultsPanel.setAttribute("aria-busy", String(isProcessing));
-  explainButtonLabel.textContent = isProcessing ? "Making your guide..." : "Make it make sense";
-}
-
-async function createStudyGuide() {
+// ── Submit handler — does NOT block the input form ─────────────────────────
+async function submitGuide() {
   const notes = notesText.value.trim();
   const question = questionText.value.trim();
   const file = activeFile;
+
   if (!file && !notes && !question) {
     showToast("Add notes, ask a question, or choose a file first.");
     return;
   }
 
+  // Build a short label for the history entry
+  const label = question || (file ? file.name : notes.slice(0, 60) + (notes.length > 60 ? "…" : ""));
+
+  // Snapshot inputs NOW so the user can change them for the next request
+  const snapshotNotes = notes;
+  const snapshotQuestion = question;
+  const snapshotFile = file;
+  const snapshotLanguage = languageSelect.value;
+
+  // Clear ONLY the question field immediately — notes and file stay for follow-ups
+  questionText.value = "";
+  questionText.focus();
   uploadStatus.textContent = "";
-  setProcessing(true);
+
+  // Insert a loading placeholder at the top of the history list
+  const loadingCard = createLoadingCard(label);
+  historyList.insertBefore(loadingCard, historyList.firstChild);
+  updateEmptyState();
+
+  // Only disable the button if this is the very first in-flight request
+  pendingCount++;
+  if (pendingCount === 1) {
+    explainButton.disabled = true;
+    sendLabel.textContent = "Sending…";
+  }
+
   try {
     const requestBody = {
-      notes: notes,
-      question: question,
-      language: languageSelect.value
+      notes: snapshotNotes,
+      question: snapshotQuestion,
+      language: snapshotLanguage
     };
 
-    if (file) {
-      const extension = file.name.split(".").pop().toLowerCase();
+    if (snapshotFile) {
+      const extension = snapshotFile.name.split(".").pop().toLowerCase();
       const mimeTypes = {
         pdf: "application/pdf",
         jpg: "image/jpeg",
@@ -198,9 +390,9 @@ async function createStudyGuide() {
         webp: "image/webp"
       };
       requestBody.file = {
-        name: file.name,
+        name: snapshotFile.name,
         mimeType: mimeTypes[extension],
-        data: await readFileData(file)
+        data: await readFileData(snapshotFile)
       };
     }
 
@@ -219,63 +411,46 @@ async function createStudyGuide() {
     if (!response.ok) {
       throw new Error(typeof result.error === "string" ? result.error : "The AI couldn't process these notes. Please try again.");
     }
-
     if (!result || typeof result.explanation !== "string" ||
         !Array.isArray(result.keyPoints) || !Array.isArray(result.questions) ||
         !Array.isArray(result.answers) ||
-        !result.keyPoints.every((item) => typeof item === "string") ||
-        !result.questions.every((item) => typeof item === "string") ||
-        !result.answers.every((item) => typeof item === "string") ||
+        !result.keyPoints.every(function (i) { return typeof i === "string"; }) ||
+        !result.questions.every(function (i) { return typeof i === "string"; }) ||
+        !result.answers.every(function (i) { return typeof i === "string"; }) ||
         result.questions.length !== result.answers.length) {
       throw new Error("The AI returned an incomplete study guide. Please try again.");
     }
 
-    renderGuide(result, requestBody.language, false);
-    showToast("Your study guide is ready.");
+    // Replace the loading card with the real guide card
+    const guideCard = createHistoryCard(label, result, snapshotLanguage);
+    historyList.replaceChild(guideCard, loadingCard);
+    showToast("Guide ready.");
+
   } catch (error) {
-    const message = error instanceof TypeError
-      ? "Could not connect to SmartNote. Run npm start and open http://localhost:3000."
-      : error.message;
-    setUploadError(message);
-    showToast(message);
+    // Replace loading card with an error card
+    loadingCard.classList.remove("loading-card");
+    loadingCard.classList.add("error-card");
+    loadingCard.innerHTML =
+      '<span class="loading-q">' + label + '</span>' +
+      '<span class="error-msg">' + (error instanceof TypeError
+        ? "Could not connect. Is the server running?"
+        : error.message) + '</span>';
+    showToast(error instanceof TypeError ? "Could not connect to SmartNote." : error.message);
   } finally {
-    setProcessing(false);
+    pendingCount--;
+    if (pendingCount === 0) {
+      explainButton.disabled = false;
+      sendLabel.textContent = "Send";
+    }
   }
 }
 
-function addQuizAnswers() {
-  const existingAnswer = document.querySelector(".quiz-answer");
-  const quizButton = document.getElementById("quiz-button");
-  if (existingAnswer) {
-    existingAnswer.remove();
-    quizButton.textContent = "Test yourself →";
-    quizButton.setAttribute("aria-expanded", "false");
-    return;
-  }
-
-  const answer = document.createElement("p");
-  answer.className = "quiz-answer";
-  answer.textContent = "Answers: " + currentGuide.answers.join(" ");
-  practiceList.insertAdjacentElement("afterend", answer);
-  quizButton.textContent = "Hide answers ↑";
-  quizButton.setAttribute("aria-expanded", "true");
-}
-
-dropZone.addEventListener("click", function () {
-  fileInput.click();
-});
-
+// ── Event listeners ────────────────────────────────────────────────────────
+dropZone.addEventListener("click", function () { fileInput.click(); });
 dropZone.addEventListener("keydown", function (event) {
-  if (event.key === "Enter" || event.key === " ") {
-    event.preventDefault();
-    fileInput.click();
-  }
+  if (event.key === "Enter" || event.key === " ") { event.preventDefault(); fileInput.click(); }
 });
-
-fileInput.addEventListener("change", function () {
-  acceptFile(fileInput.files[0]);
-});
-
+fileInput.addEventListener("change", function () { acceptFile(fileInput.files[0]); });
 document.getElementById("remove-file").addEventListener("click", clearFile);
 
 ["dragenter", "dragover"].forEach(function (eventName) {
@@ -284,60 +459,58 @@ document.getElementById("remove-file").addEventListener("click", clearFile);
     dropZone.classList.add("is-dragging");
   });
 });
-
 ["dragleave", "drop"].forEach(function (eventName) {
   dropZone.addEventListener(eventName, function (event) {
     event.preventDefault();
     dropZone.classList.remove("is-dragging");
   });
 });
+dropZone.addEventListener("drop", function (event) { acceptFile(event.dataTransfer.files[0]); });
 
-dropZone.addEventListener("drop", function (event) {
-  acceptFile(event.dataTransfer.files[0]);
-});
+explainButton.addEventListener("click", submitGuide);
 
-explainButton.addEventListener("click", createStudyGuide);
-
-document.getElementById("try-sample").addEventListener("click", function () {
-  renderSampleGuide();
-  showToast("Showing a sample guide about photosynthesis.");
-});
-
-document.getElementById("quiz-button").addEventListener("click", addQuizAnswers);
-languageSelect.addEventListener("change", function () {
-  if (currentGuideIsSample) {
-    renderSampleGuide();
-    return;
-  }
-  showToast("Your current guide is in " + languageTag.textContent + ". Generate it again to use " + languageSelect.value + ".");
+// Allow Ctrl+Enter / Cmd+Enter inside textareas to submit
+[notesText, questionText].forEach(function (ta) {
+  ta.addEventListener("keydown", function (event) {
+    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      submitGuide();
+    }
+  });
 });
 
 document.getElementById("reset-button").addEventListener("click", function () {
+  historyList.replaceChildren();
+  updateEmptyState();
   clearFile();
   notesText.value = "";
   questionText.value = "";
   languageSelect.value = "Simple English";
-  renderSampleGuide();
-  showToast("Your guide is reset. Add new notes whenever you're ready.");
+  showToast("All guides cleared.");
 });
 
+languageSelect.addEventListener("change", function () {
+  // nothing to do — each submission snapshots its own language
+});
+
+// ── Health check ───────────────────────────────────────────────────────────
 fetch("/api/health")
   .then(function (response) {
-    if (!response.ok) throw new Error("SmartNote server is unavailable.");
+    if (!response.ok) throw new Error("unavailable");
     return response.json();
   })
   .then(function (status) {
     if (status.configured) {
-      aiStatusLabel.textContent = "OpenAI connected";
-      prototypeNote.textContent = "Your notes and questions are sent to OpenAI for processing. SmartNote doesn't store them.";
+      aiStatusLabel.textContent = "OpenRouter connected";
+      prototypeNote.textContent = "Notes and questions are sent to OpenRouter's free-model router. SmartNote doesn't store them.";
     } else {
       aiStatusLabel.textContent = "AI setup needed";
-      prototypeNote.textContent = "AI is not connected yet. Add OPENAI_API_KEY to .env; notes and questions are sent to OpenAI only when you request a guide.";
+      prototypeNote.textContent = "Add OPENROUTER_API_KEY to .env and restart to enable AI.";
     }
   })
   .catch(function () {
     aiStatusLabel.textContent = "Server not connected";
-    prototypeNote.textContent = "Run npm start and open http://localhost:3000 to connect SmartNote to AI.";
+    prototypeNote.textContent = "Run npm start and open http://localhost:3000.";
   });
 
-renderSampleGuide();
+updateEmptyState();
